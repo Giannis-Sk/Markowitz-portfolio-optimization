@@ -1,0 +1,107 @@
+import numpy as np
+import pandas as pd
+import datetime as dt
+import yfinance as yf
+import scipy as sc
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def getdata(stocks,start,end):
+    stockdata=yf.download(stocks,start,end)
+    data=stockdata["Close"]
+    returns=data.pct_change()
+    meanreturns=returns.mean()
+    covmatrix=returns.cov()
+    return covmatrix,meanreturns
+
+def portfolioperformance(weights,mean,covmatrix):
+    returns=np.sum(weights*mean)*252
+    #Portfolio variance linear algebra quadratic form
+    std=np.sqrt(np.dot(weights.T,np.dot(covmatrix,weights)))*np.sqrt(252)
+    return returns,std
+def nesharpe(weights,meanreturns,covmatrix,riskfree=0):
+    preturns,pstd=portfolioperformance(weights,meanreturns,covmatrix)
+    return -(preturns-riskfree)/pstd
+def portfoliovariance(weights,meanreturns,covmatrix):
+    return portfolioperformance(weights,meanreturns,covmatrix)[1]
+def maxsharpe(meanreturns,covmatrix,riskfree=0,constaraintSet=(0,1)):
+    #Minimaze negsharpe ratio
+    numAssets=len(meanreturns)
+    args=(meanreturns,covmatrix,riskfree)
+    con=({"type":"eq","fun":lambda x:np.sum(x)-1})
+    bound=constaraintSet
+    bounds=tuple(bound for asset in range(numAssets))
+    result=sc.optimize.minimize(nesharpe,numAssets*[1./numAssets],args=args,bounds=bounds,constraints=con
+                       ,method="SLSQP")
+    return result
+def minvar(meanreturns,covmatrix,constaraintSet=(0,1)):
+    #Minimaze negsharpe ratio
+    numAssets=len(meanreturns)
+    args=(meanreturns,covmatrix)
+    con=({"type":"eq","fun":lambda x:np.sum(x)-1})
+    bound=constaraintSet
+    bounds=tuple(bound for asset in range(numAssets))
+    result=sc.optimize.minimize(portfoliovariance,numAssets*[1./numAssets],args=args,bounds=bounds,constraints=con
+                       ,method="SLSQP")
+    return result
+def portfolioReturn(weights,meanreturns,covmatrix):
+    return portfolioperformance(weights,meanreturns,covmatrix)[0]
+def efficientOpt(meanreturns,covmatrix,returnTarget,constaraintSet=(0,1)):
+    numAssets = len(meanreturns)
+    args = (meanreturns, covmatrix)
+    con = ({"type": "eq", "fun": lambda x: np.sum(x) - 1},
+           {"type": "eq", "fun": lambda x: portfolioReturn(x,meanreturns,covmatrix)-returnTarget})
+    bound = constaraintSet
+    bounds = tuple(bound for asset in range(numAssets))
+    effopt = sc.optimize.minimize(portfoliovariance, numAssets * [1. / numAssets], args=args, bounds=bounds,
+                                  constraints=con
+                                  , method="SLSQP")
+    return effopt
+def calculatedResurlts(meanreturns,covmatrix,riskfree=0,constaraintSet=(0,1)):
+    maxSh_Portfolio=maxsharpe(meanreturns,covmatrix)
+    maxsh_returns,maxsh_std=portfolioperformance(maxSh_Portfolio["x"],meanreturns,covmatrix)
+    maxsh_allocation=pd.DataFrame(maxSh_Portfolio["x"],index=meanreturns.index,columns=["allocation"])
+
+    minvol_Portfolio = minvar(meanreturns, covmatrix)
+    minvo_returns, minvol_std = portfolioperformance(minvol_Portfolio["x"], meanreturns, covmatrix)
+    minvol_allocation = pd.DataFrame(minvol_Portfolio["x"], index=meanreturns.index, columns=["allocation"])
+
+
+    targetReturns=np.linspace(minvo_returns,maxsh_returns,num=50)
+    efficientlist=[]
+    for target in targetReturns:
+        efficientlist.append(efficientOpt(meanreturns, covmatrix, target)["fun"])
+
+    return maxsh_returns,maxsh_std,maxsh_allocation, minvo_returns, minvol_std,minvol_allocation,efficientlist,targetReturns
+
+def plotting(meanreturns,covmatrix,cov_val,means_val):
+    n=len(meanreturns)
+    maxsh_returns, maxsh_std, maxsh_allocation, minvo_returns, minvol_std, minvol_allocation, efficientlist, targetReturns = calculatedResurlts(meanreturns, covmatrix)
+    raw_numbers = np.random.rand(1000,n )
+    weight = raw_numbers / raw_numbers.sum(axis=1, keepdims=True)
+    returnss = np.sum(weight * means_val, axis=1) * 252
+    var = np.sum((weight @ cov_val) * weight, axis=1)
+    stds = np.sqrt(var) * np.sqrt(252)
+    sharpe=returnss/stds
+    sns.set_theme(style="darkgrid")
+    sns.scatterplot(x=stds, y=returnss,hue=sharpe, palette="ch:r=-.5,l=.75")
+    sns.scatterplot(x=efficientlist, y=targetReturns)
+    plt.scatter(maxsh_std, maxsh_returns, color="green", edgecolor="black")
+    plt.scatter(minvol_std, minvo_returns, color="red", edgecolor="black")
+    plt.title("Efficient Frontier")
+    plt.xlabel("Standard deviation")
+    plt.ylabel("Returns")
+    plt.legend(title="Sharpe")
+    plt.show()
+
+end=dt.datetime.today()
+start = dt.datetime.today() - dt.timedelta(days=365)
+stocks=["AAPL","NVDA","MSFT"]
+weights=np.array([0.3,0.3,0.3])
+covmatrix,meanreturns=getdata(stocks,start,end)
+cov_val = covmatrix.values
+means_val = meanreturns.values
+plotting(meanreturns,covmatrix,cov_val,means_val)
+
+
+
